@@ -54,8 +54,28 @@ def run_analysis(args: Namespace):
     log(f'Model base architecture: {model_base_architecture}')
     log(f'Experiment run: {experiment_run}\n')
 
-    ppnet = torch.load(args.model)
-    ppnet = ppnet.cuda()
+    # Load the pickled model. Newer PyTorch versions default to weights-only loading
+    # which may fail for older checkpoints that contain pickled module instances.
+    # Try to allowlist the PPNet class for safe unpickling when available, otherwise
+    # fall back to loading with weights_only=False (trusted checkpoint).
+    try:
+        from .model import PPNet as _PPNetClass
+        import torch.serialization as _ts
+        if hasattr(_ts, 'safe_globals'):
+            with _ts.safe_globals([_PPNetClass]):
+                ppnet = torch.load(args.model, weights_only=False, map_location='cuda' if torch.cuda.is_available() else 'cpu')
+        else:
+            # Older torch may provide add_safe_globals or only allow weights_only flag
+            if hasattr(_ts, 'add_safe_globals'):
+                _ts.add_safe_globals([_PPNetClass])
+            ppnet = torch.load(args.model, weights_only=False, map_location='cuda' if torch.cuda.is_available() else 'cpu')
+    except Exception as e:
+        # As a last resort, attempt to load with weights_only=False without modifications.
+        # This can execute arbitrary code from the checkpoint — only proceed if the file
+        # is trusted.
+        log(f'Warning: safe unpickle attempt failed ({e}). Falling back to torch.load(weights_only=False).')
+        ppnet = torch.load(args.model, weights_only=False)
+    ppnet = ppnet.cuda() if torch.cuda.is_available() else ppnet
     ppnet_multi = torch.nn.DataParallel(ppnet)
 
     img_size = ppnet_multi.module.img_size
@@ -89,8 +109,12 @@ def run_analysis(args: Namespace):
     makedir(root_dir_for_saving_test_images)
 
     # save prototypes in original images
-    load_img_dir = os.path.join(os.path.dirname(args.model), '..', 'img')
-    assert os.path.exists(load_img_dir), f'Folder "{load_img_dir}" does not exist'
+    try:
+        load_img_dir = os.path.join(os.path.dirname(args.model), '..', 'img')
+        assert os.path.exists(load_img_dir), f'Folder "{load_img_dir}" does not exist'
+    except Exception as e:
+        load_img_dir = "./img"
+        assert os.path.exists(load_img_dir), f'Folder "{load_img_dir}" does not exist'
     prototype_info = np.load(os.path.join(load_img_dir, f'epoch-{start_epoch_number}', 'bb.npy'))
 
     for j in tqdm(range(ppnet.num_prototypes), desc='Saving learned prototypes'):

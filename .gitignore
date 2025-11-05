@@ -8,3 +8,6 @@ docs
 analysis
 .venv/
 *.pth
+*.egg-info
+data/
+!data.md

@@ -73,7 +73,7 @@ def find_k_nearest_patches_to_prototypes(dataloader,  # pytorch dataloader (must
             search_batch = search_batch_input
 
         with torch.no_grad():
-            search_batch = search_batch.cuda()
+            search_batch = search_batch.cuda() if torch.cuda.is_available() else search_batch
             protoL_input_torch, proto_dist_torch = prototype_network_parallel.module.push_forward(search_batch)
 
         proto_dist_ = np.copy(proto_dist_torch.detach().cpu().numpy())

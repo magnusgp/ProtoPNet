@@ -1,0 +1,30 @@
+[project]
+name = "understandable-ProtoPNet"
+version = "0.1.0"
+description = "ProtoPNet: interpretability experiments — dependencies managed via astral uv"
+readme = "README.md"
+requires-python = ">=3.8"
+
+# NOTE: This file provides dependency metadata in PEP-621 format. Astral's `uv` reads
+# standard pyproject metadata (project.dependencies). If you need CUDA-specific wheels
+# (torch with a particular CUDA version) you'll still need to add an index URL or
+# install the appropriate wheel manually; this file lists generic package names.
+
+dependencies = [
+  "gdown>=4.5",
+  "matplotlib>=3.5",
+  "numpy>=1.23",
+  "pandas>=1.5",
+  "opencv-python>=4.6",
+  "Pillow>=9.0",
+  "torch>=1.13",
+  "torchvision>=0.14",
+  "tqdm>=4.64",
+]
+
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["ppnet*"]

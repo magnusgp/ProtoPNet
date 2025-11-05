@@ -1,0 +1,81 @@
+version: "3"
+
+vars:
+  DATASET: "data"
+  EXP_NAME: "experiment"
+  MODEL_PATH: "300push76.89.pth"
+
+tasks:
+  # Prepare data
+  prepare:cub200:
+    desc: "Prepare the CUB-200 dataset"
+    cmds:
+      - uv run prepare_data.py cub200
+
+  prepare:celeb_a:
+    desc: "Prepare the CelebA dataset"
+    cmds:
+      - uv run prepare_data.py celeb_a
+  
+  download_cub:
+    desc: "Download CUB-200 dataset file"
+    cmds:
+      - curl -L -o cub200.tgz https://data.caltech.edu/records/65de6-vp158/files/CUB_200_2011.tgz?download=1
+  
+  create_cub:
+    desc: "Create CUB-200 dataset from downloaded file"
+    cmds:
+      - uv run prepare_data.py cub200_fromfile
+
+  # Train
+  train:
+    desc: "Train a new model (set DATASET and EXP_NAME env or use defaults)"
+    cmds:
+      - uv run train.py --dataset "{{.DATASET}}" --exp_name "{{.EXP_NAME}}"
+
+  # Prune prototypes
+  prune_prototypes:
+    desc: "Prune learned prototypes from a model"
+    vars:
+      dataset: "{{.DATASET}}"
+      model: "{{.MODEL_PATH}}"
+    cmds:
+      - uv run prune_prototypes.py --dataset "{{.dataset}}" --model "{{.model}}"
+
+  # Evaluate
+  evaluate:global:
+    desc: "Evaluate: global (most activated patches across dataset)"
+    vars:
+      model: "{{.MODEL_PATH}}"
+      dataset: "{{.DATASET}}"
+    cmds:
+      - uv run evaluate.py --model "{{.model}}" global --dataset "{{.dataset}}"
+
+  evaluate:local:
+    desc: "Evaluate: local (visualizations for subset of samples)"
+    vars:
+      model: "{{.MODEL_PATH}}"
+      dataset: "{{.DATASET}}"
+    cmds:
+      - uv run evaluate.py --model "{{.model}}" local --dataset "{{.dataset}}"
+
+  evaluate:alignment:
+    desc: "Evaluate: alignment (alignment matrix plots)"
+    vars:
+      model: "{{.MODEL_PATH}}"
+      dataset: "{{.DATASET}}"
+    cmds:
+      - uv run evaluate.py --model "{{.model}}" alignment --dataset "{{.dataset}}"
+
+  # Utility: install dependencies (tries uv, otherwise pip fallback)
+  install-deps:
+    desc: "Install project dependencies using astral 'uv' when available, otherwise pip"
+    cmds:
+      - if command -v uv >/dev/null 2>&1; then echo "uv detected — run 'uv install' manually or see uv docs"; else echo "uv not detected, falling back to pip" && python3 -m pip install -r requirements.txt; fi
+
+  # Shortcuts
+  all:
+    desc: "Prepare both datasets"
+    deps:
+      - prepare:cub200
+      - prepare:celeb_a

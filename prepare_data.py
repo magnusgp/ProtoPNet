@@ -77,6 +77,46 @@ def generate_cub200():
                 os.makedirs(out_path)
             cropped.save(f'{out_path}/{id1}.jpg')
 
+def generate_cub200_fromfile(dataset_archive_path):
+    """Generate cub200 dataset."""
+    print('Downloading dataset...')
+    dataset_path = os.path.dirname(dataset_archive_path)
+    print('Unpacking folder...')
+    original_path = unpack_dataset(dataset_archive_path)
+    print('Generating parts locations...')
+    part_names = pd.read_csv(f'{original_path}/CUB_200_2011/parts/parts.txt', header=None)[0].str.split(' ', n=1, expand=True).rename(columns={0: 'part_id', 1: 'part_name'}).astype({'part_id': int})
+    part_locs = pd.read_csv(f'{original_path}/CUB_200_2011/parts/part_locs.txt', header=None, names=['image_id', 'part_id', 'x', 'y', 'visible'], sep=' ')
+    bboxes = pd.read_csv(f'{original_path}/CUB_200_2011/bounding_boxes.txt', header=None, sep=' ', names=['image_id', 'bb_x', 'bb_y', 'bb_w', 'bb_h'])
+    part_locs = part_locs[part_locs.visible == 1]  # Remove parts that are not visible
+    part_locs = part_locs.merge(part_names, on='part_id').drop(['part_id', 'visible'], axis=1)
+    part_locs = part_locs.merge(bboxes, on='image_id')
+    part_locs['x'] -= part_locs['bb_x']  # Adjust x and y coordinates to be relative to the cropped bounding box
+    part_locs['y'] -= part_locs['bb_y']
+    part_locs = part_locs.drop(['bb_x', 'bb_y', 'bb_w', 'bb_h'], axis=1).astype({'x': int, 'y': int})
+    part_locs.to_csv(f'{dataset_path}/part_locs.csv', index=False)
+    print('Cropping images...')
+    img_count = 0
+    with open(f'{original_path}/CUB_200_2011/images.txt') as f:
+        for line in f: img_count += 1
+    with open(f'{original_path}/CUB_200_2011/images.txt') as images_file, \
+         open(f'{original_path}/CUB_200_2011/bounding_boxes.txt') as bboxes_file, \
+         open(f'{original_path}/CUB_200_2011/train_test_split.txt') as split_file:
+        for images_line, bboxes_line, split_line in tqdm(zip(images_file, bboxes_file, split_file), total=img_count):
+            # Read lines
+            id1, path = images_line.strip().split(' ')
+            id2, x, y, w, h = [int(float(x)) for x in bboxes_line.strip().split(' ')]
+            id3, is_training = split_line.strip().split(' ')
+            if int(id1) != int(id2) or int(id1) != int(id3):
+                raise ValueError(f'ids in images.txt and bounding_boxes.txt do not match for {id1}, {id2} and {id3}.')
+            # Crop image
+            img = Image.open(f'{original_path}/CUB_200_2011/images/{path}')
+            cropped = img.crop((x, y, x + w, y + h))
+            # Save image
+            class_folder, _ = path.split('/')
+            out_path = f'{dataset_path}/{"train" if bool(int(is_training)) else "test"}/{class_folder}'
+            if not os.path.exists(out_path):
+                os.makedirs(out_path)
+            cropped.save(f'{out_path}/{id1}.jpg')
 
 def _get_img_part_loc(filepath):
     """Get part location centroid from a given binary mask."""
@@ -156,13 +196,15 @@ def generate_celeb_a():
 
 
 parser = argparse.ArgumentParser(description='Download and prepare the dataset')
-parser.add_argument('dataset', type=str, choices=['cub200', 'celeb_a'], help='The dataset to download %(choices)s')
+parser.add_argument('dataset', type=str, choices=['cub200', 'celeb_a', 'cub200_fromfile'], help='The dataset to download %(choices)s')
 
 if __name__ == '__main__':
     args = parser.parse_args()
     print(f'Generating "{args.dataset}" dataset...')
     if args.dataset == 'cub200':
         generate_cub200()
+    elif args.dataset == 'cub200_fromfile':
+        generate_cub200_fromfile('data/cub200.tgz')
     elif args.dataset == 'celeb_a':
         generate_celeb_a()
     else:
