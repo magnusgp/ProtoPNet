@@ -10,4 +10,4 @@ analysis
 *.pth
 *.egg-info
 data/
-!data.md
+jobscript.sh
