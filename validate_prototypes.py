@@ -16,20 +16,22 @@ from ppnet.model import construct_PPNet
 from ppnet.preprocess import preprocess_input_function, mean, std
 from ppnet.helpers import set_seed
 
-def load_part_annotations(annotation_file, img_size, orig_size=None):
+def load_part_annotations(annotation_file, img_size, dataset_path=None):
     """
     Load part annotations for CUB-200 dataset.
     annotation_file: path to CSV with columns: image_id, x, y, part_name
     img_size: int, the size to which images are resized (img_size × img_size)
-    orig_size: (orig_w, orig_h) or None. If None, we assume annotations given in original image coordinates,
-               and we scale them uniformly so that width/height → img_size. If orig size varies per image,
-               you may skip scaling (see print debug below).
+    dataset_path: path to dataset root (to load actual image sizes for scaling)
     Returns:
       dict of image_id (int) -> list of (part_name, (x_min, y_min, x_max, y_max))
     """
+    from PIL import Image
     annots = {}
     # If using point annotations (x,y) rather than full boxes, we define a small box around point
-    box_half = 10  # pixels in resized image space; you may adjust
+    box_half = 15  # pixels in resized image space; you may adjust
+    image_sizes = {}  # cache image sizes
+    
+    # Load annotations first
     with open(annotation_file, newline='') as f:
         reader = csv.DictReader(f)
         for row in reader:
@@ -37,15 +39,35 @@ def load_part_annotations(annotation_file, img_size, orig_size=None):
             x = float(row['x'])
             y = float(row['y'])
             part_name = row['part_name']
-            if orig_size is not None:
-                orig_w, orig_h = orig_size
-                scale_x = img_size / orig_w
-                scale_y = img_size / orig_h
-            else:
-                # assume square and same scale for width and height
-                scale_x = scale_y = img_size / img_size
+            
+            # Get original image size for scaling (annotations are in cropped image coordinates)
+            if dataset_path and img_id not in image_sizes:
+                # Try to find the image file
+                for split in ['test', 'train']:
+                    split_dir = os.path.join(dataset_path, split)
+                    if os.path.exists(split_dir):
+                        for class_dir in os.listdir(split_dir):
+                            img_path = os.path.join(split_dir, class_dir, f"{img_id}.jpg")
+                            if os.path.exists(img_path):
+                                try:
+                                    img = Image.open(img_path)
+                                    orig_w, orig_h = img.size
+                                    image_sizes[img_id] = (orig_w, orig_h)
+                                    break
+                                except:
+                                    pass
+                # If not found, assume a reasonable default (most CUB images are roughly square after cropping)
+                if img_id not in image_sizes:
+                    image_sizes[img_id] = (224, 224)  # fallback: assume already resized
+            
+            orig_w, orig_h = image_sizes.get(img_id, (224, 224))
+            
+            # Scale coordinates from original cropped size to resized size
+            scale_x = img_size / orig_w
+            scale_y = img_size / orig_h
             x_s = x * scale_x
             y_s = y * scale_y
+            
             x_min = max(0.0, x_s - box_half)
             y_min = max(0.0, y_s - box_half)
             x_max = min(img_size, x_s + box_half)
@@ -141,7 +163,7 @@ def main(args):
     print("Using device:", device)
 
     # Load annotations
-    part_annotations = load_part_annotations(args.annotation_file, img_size=args.img_size)
+    part_annotations = load_part_annotations(args.annotation_file, img_size=args.img_size, dataset_path=args.dataset)
 
 
     # Build model
@@ -229,7 +251,13 @@ def main(args):
         distances_full = ppnet.module._l2_convolution(feature_maps)
         batch_size, num_protos, H_feat, W_feat = distances_full.shape
         for b in range(batch_size):
-            image_id = image_ids[b]
+            image_id_str = image_ids[b]
+            # Convert image_id to int for annotation lookup
+            try:
+                image_id = int(image_id_str)
+            except (ValueError, TypeError):
+                # If it's not a simple integer, try extracting from filename
+                image_id = int(os.path.splitext(os.path.basename(str(image_id_str)))[0])
             cls = labels[b].item()
             for j in range(num_protos):
                 amap = distances_full[b, j, :, :].cpu()
@@ -239,12 +267,12 @@ def main(args):
                 bbox = map_activation_to_bbox(row, col, (args.img_size, args.img_size),
                                               (H_feat, W_feat), bbox_size=tuple(args.bbox_size))
                 part_annots = part_annotations.get(image_id, [])
-                part_label = determine_part_label_for_bbox(bbox, part_annots, iou_threshold=0.3)
+                part_label = determine_part_label_for_bbox(bbox, part_annots, iou_threshold=0.2)
                 if part_label is None:
                     part_label = "none"
                 proto_assignments[j].append(part_label)
                 if image_count < 5 and j == 0:
-                    print(f"Image {image_id}, proto {j}: bbox {bbox}, part_annots {part_annots}, assigned {part_label}")
+                    print(f"Image {image_id} (from '{image_id_str}'), proto {j}: bbox {bbox}, part_annots {len(part_annots)} parts, assigned {part_label}")
                 results_orig.append({
                     "image_id": image_id,
                     "class": cls,
@@ -298,7 +326,7 @@ def main(args):
         print("Applying perturbations and extracting activations (perturbed)…")
         results_pert = []
         per_proto_same = {j: [] for j in range(num_prototypes)}
-        image_count = 0
+        pert_image_count = 0  # Track position in perturbed sequence (matches original image_count)
         for images, labels, image_ids in tqdm(test_loader):
             images = images.to(device)
             labels = labels.to(device)
@@ -308,7 +336,13 @@ def main(args):
             distances_full = ppnet.module._l2_convolution(feature_maps)
             batch_size, num_protos, H_feat, W_feat = distances_full.shape
             for b in range(batch_size):
-                image_id = image_ids[b]
+                image_id_str = image_ids[b]
+                # Convert image_id to int for annotation lookup
+                try:
+                    image_id = int(image_id_str)
+                except (ValueError, TypeError):
+                    # If it's not a simple integer, try extracting from filename
+                    image_id = int(os.path.splitext(os.path.basename(str(image_id_str)))[0])
                 cls = labels[b].item()
                 for j in range(num_protos):
                     amap = distances_full[b, j, :, :].cpu()
@@ -318,7 +352,7 @@ def main(args):
                     bbox = map_activation_to_bbox(row, col, (args.img_size, args.img_size),
                                                   (H_feat, W_feat), bbox_size=tuple(args.bbox_size))
                     part_annots = part_annotations.get(image_id, [])
-                    part_label = determine_part_label_for_bbox(bbox, part_annots, iou_threshold=0.3)
+                    part_label = determine_part_label_for_bbox(bbox, part_annots, iou_threshold=0.2)
                     if part_label is None:
                         part_label = "none"
                     results_pert.append({
@@ -327,11 +361,15 @@ def main(args):
                         "proto_idx": j,
                         "part_label": part_label
                     })
-                    if image_count < 5 and j == 0:
-                        print(f"Image {image_id}, proto {j}: bbox {bbox}, part_annots {part_annots}, assigned {part_label}")
-                    per_proto_same[j].append(1 if part_label == proto_assignments[j][min(image_count, len(proto_assignments[j])-1)] else 0)
-            image_count += batch_size
-            if args.num_samples and image_count >= args.num_samples:
+                    if pert_image_count < 5 and j == 0:
+                        print(f"Image {image_id} (from '{image_id_str}'), proto {j}: bbox {bbox}, part_annots {len(part_annots)} parts, assigned {part_label}")
+                    # Match by image index: pert_image_count should match original image_count position
+                    if pert_image_count < len(proto_assignments[j]):
+                        per_proto_same[j].append(1 if part_label == proto_assignments[j][pert_image_count] else 0)
+                    else:
+                        per_proto_same[j].append(0)
+                pert_image_count += 1
+            if args.num_samples and pert_image_count >= args.num_samples:
                 break
 
         per_proto_frac = {j: (sum(vals)/len(vals) if len(vals)>0 else 0.0) for j, vals in per_proto_same.items()}
