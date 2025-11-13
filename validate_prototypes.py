@@ -28,7 +28,7 @@ def load_part_annotations(annotation_file, img_size, dataset_path=None):
     from PIL import Image
     annots = {}
     # If using point annotations (x,y) rather than full boxes, we define a small box around point
-    box_half = 15  # pixels in resized image space; you may adjust
+    box_half = 10  # pixels in resized image space; you may adjust (original was 10)
     image_sizes = {}  # cache image sizes
     
     # Load annotations first
@@ -352,7 +352,7 @@ def main(args):
                     bbox = map_activation_to_bbox(row, col, (args.img_size, args.img_size),
                                                   (H_feat, W_feat), bbox_size=tuple(args.bbox_size))
                     part_annots = part_annotations.get(image_id, [])
-                    part_label = determine_part_label_for_bbox(bbox, part_annots, iou_threshold=0.2)
+                    part_label = determine_part_label_for_bbox(bbox, part_annots, iou_threshold=0.3)
                     if part_label is None:
                         part_label = "none"
                     results_pert.append({
